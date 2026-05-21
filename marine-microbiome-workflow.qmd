@@ -10,47 +10,164 @@ lang: fr
 knitr::opts_chunk$set(warning = FALSE, message = FALSE, cache = TRUE)
 ```
 
-## Introduction
 
-Bienvenue dans ce workflow d'introduction au [miaverse](https://microbiome.github.io/) à l'aide du **microbiome marin**. blabla microbiome marin
+::: {.callout-important title="Avant de rendre ce document"}
+Certains packages Bioconductor (notamment `mia`) requièrent des versions
+récentes de dépendances de base comme `rlang` (≥ 1.1.6). R ne pouvant pas
+mettre à jour un package déjà chargé en mémoire, **redémarrez votre session R**
+(RStudio : *Session > Restart R*), puis exécutez **dans la console** :
 
-Ce tutoriel reprend la trame d'un workflow d'introduction au package
-[`mia`](https://microbiome.github.io/mia/) et l'applique à un cas d'étude marin.
-Au programme :
+```r
+install.packages(c("rlang", "cli", "vctrs", "lifecycle"))
+```
 
-- importer et structurer des données de microbiome dans un objet
-  `TreeSummarizedExperiment`,
-- manipuler et sous-ensembler les données,
-- estimer la diversité **alpha** (à l'intérieur d'un échantillon) et **bêta**
-  (entre échantillons),
-- visualiser la composition taxonomique,
-- ouvrir vers les vraies données de l'expédition *Tara Oceans*.
-
-::: {.callout-note}
-Le code est entièrement reproductible. Le jeu de données utilisé est inclus dans
-`mia`, aucun téléchargement externe n'est nécessaire.
+Vous pouvez ensuite lancer `quarto render` normalement.
 :::
 
-## Installation des packages
+## Introduction
+
+Bonjour et bienvenue dans ce workflow d'introduction à **miaverse**, un
+package R/Bioconductor pour l'analyse du microbiome.
+Ce tutoriel reprend la trame de
+[*Introductory workflow*](https://microbiome.github.io/OMA/docs/devel/) du
+livre OMA, mais l'illustre cette fois sur des **échantillons aquatiques**
+(océan, eau douce, sédiments estuariens). L'idée est d'apprendre à
+manipuler les objets et fonctions clés de miaverse et le faire sur un cas
+d'étude différent de l'intestin humain, pour montrer que les mêmes outils
+s'appliquent à n'importe quel contexte d'écologie microbienne.
+
+À la fin de ce workflow, vous saurez :
+
+- Charger et inspecter un `TreeSummarizedExperiment`,
+- En extraire les trois composantes principales (`assays`, `colData`, `rowData`),
+- Manipuler les données (sous-ensembles, agglomération taxonomique),
+- Calculer les indicateurs de **diversité alpha** (richesse, Shannon) et de
+  **diversité bêta** (Bray-Curtis, PCoA),
+- Visualiser la composition avec une heatmap.
+
+## Importation des packages
+
+Lors de l'utilisation des packages miaverse, plusieurs façons d'importer sont
+possibles. Commençons par charger les packages requis :
 
 ```{r}
 #| label: install
 #| output: false
 packages <- c(
-  "mia", "miaViz", "scater",
-  "ggplot2", "patchwork", "plotly", "DT",
-  "vegan", "dplyr", "sechm"
+  "ggplot2", "knitr", "mia", "dplyr", "miaViz", "vegan", "DT",
+  "scater", "patchwork", "sechm", "plotly"
 )
 
-# Installation via BiocManager si nécessaire
+# Packages déjà installés
+packages_already_installed <- packages[packages %in% installed.packages()]
+
+# Packages à installer
+packages_need_to_install <- setdiff(packages, packages_already_installed)
+
+# BiocManager (gestionnaire Bioconductor)
 if (!require("BiocManager", quietly = TRUE)) {
   install.packages("BiocManager")
+  library("BiocManager")
 }
 
-to_install <- setdiff(packages, rownames(installed.packages()))
-if (length(to_install) > 0) {
-  BiocManager::install(to_install, ask = FALSE, update = FALSE)
+# Installation
+if (length(packages_need_to_install) > 0) {
+  BiocManager::install(packages_need_to_install, ask = FALSE, update = FALSE)
 }
 
-invisible(lapply(packages, library, character.only = TRUE))
+# Chargement et vérification
+pkgs_not_loaded <- !sapply(packages, require, character.only = TRUE)
+pkgs_not_loaded <- names(pkgs_not_loaded)[pkgs_not_loaded]
+if (length(pkgs_not_loaded) > 0) {
+  stop("Échec de chargement : '",
+       paste0(pkgs_not_loaded, collapse = "', '"), "'")
+}
 ```
+
+## Importation des données
+
+`mia` met à disposition plusieurs jeux de données intégrés (voir
+`?mia::mia-package`). Pour ce tutoriel, nous utilisons `GlobalPatterns`
+[@Caporaso2011], qui couvre neuf environnements très contrastés (intestin,
+peau, sol, océan, eau douce, sédiments, etc.). Nous le réduisons aux
+environnements **aquatiques** :
+
+```{r}
+#| label: loadDataset
+data("GlobalPatterns", package = "mia")
+
+# Sous-ensemble aux trois environnements aquatiques
+aquatic <- c("Ocean", "Freshwater", "Sediment (estuary)")
+tse <- GlobalPatterns[, GlobalPatterns$SampleType %in% aquatic]
+tse$SampleType <- factor(tse$SampleType, levels = aquatic)
+
+tse
+```
+
+L'affichage d'un TreeSE donne en une vue : le nombre de taxons en lignes
+(`nrow`), le nombre d'échantillons en colonnes (`ncol`), les assays
+disponibles (ici un seul, `counts`), les colonnes de `colData`, l'arbre
+phylogénétique attaché (`rowTree`) et les rangs taxonomiques. C'est l'objet
+unique qui sert de pivot à toutes les opérations miaverse, comme ça pas besoin d'utiliser trois fichiers séparés.
+
+D'autres façons d'importer existent dans `mia` (`importQIIME2()`,
+`importBIOM()`, conversion depuis un objet `phyloseq` avec `convertFromPhyloseq()`)
+et sont décrites dans [la documentation OMA](https://microbiome.github.io/OMA/).
+
+## Stockage des données du microbiome
+
+Le `TreeSummarizedExperiment` (TreeSE) est l'objet central de miaverse. Il
+permet de stocker dans une seule structure des matrices d'abondance, des
+métadonnées d'échantillons, une taxonomie et éventuellement un arbre
+phylogénétique. Voici les trois fonctions essentiels à connaître :
+
+L'**assay** est la matrice d'abondance (par défaut les comptes bruts). Une
+ligne = un taxon, une colonne = un échantillon :
+
+```{r}
+#| label: showAssay
+assay(tse)[1:5, 1:5]
+```
+
+La majorité des cellules valent zéro et les
+valeurs non nulles s'étalent sur plusieurs ordres de grandeur. C'est une
+signature typique des données de séquençage 16S, où chaque échantillon ne
+contient qu'une petite fraction des taxons présents dans la base.
+Notez aussi les identifiants en ligne (numéros d'OTU/GreenGenes). Pour retrouver la
+correspondance avec les taxons réels on utilisera `rowData`.
+
+Le **colData** stocke les métadonnées d'échantillons (un échantillon par ligne) :
+
+```{r}
+#| label: showColdata
+tse_df_colData <- as.data.frame(colData(tse))
+datatable(tse_df_colData,
+          options = list(pageLength = 5, scrollX = TRUE),
+          rownames = FALSE)
+```
+
+On retrouve les neuf échantillons aquatiques avec leur type d'habitat
+(`SampleType`) et une description du site de prélèvement. C'est dans
+`colData` qu'on ajoutera plus tard les indices de diversité calculés,
+mia stocke toujours les variables par échantillon ici, jamais dans un
+data.frame séparé. Pour ajouter une colonne, on écrit simplement
+`tse$nouvelle_variable <- ...`.
+
+Le **rowData** contient les caractéristiques des taxons, notamment la
+taxonomie :
+
+```{r}
+#| label: showRowdata
+tse_df_rowData <- as.data.frame(rowData(tse))
+datatable(tse_df_rowData[1:50, ],
+          options = list(pageLength = 5, scrollX = TRUE))
+```
+
+Chaque ligne décrit un taxon avec ses sept rangs (Kingdom à Species). De
+nombreuses cases sont vides ou `NA` aux rangs les plus bas, ce qui est normal
+en métabarcoding 16S : la résolution taxonomique des short reads est limitée,
+et beaucoup de séquences ne peuvent être affiliées qu'au Genus ou plus haut.
+Ces colonnes sont la base de la fonction d'agglomération vue plus bas.
+
+![Structure d'un *TreeSummarizedExperiment* (figure adaptée de @Huang2021).](https://microbiome.github.io/OMA/inst/pages/images/TSE-structure.svg){.lightbox .contentimg}
+
