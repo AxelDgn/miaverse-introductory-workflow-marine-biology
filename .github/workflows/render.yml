@@ -1,0 +1,118 @@
+name: Render and publish Quarto site
+
+# Quand déclencher ce workflow
+on:
+  # À chaque push sur la branche main
+  push:
+    branches: [main]
+  # Permet aussi de le lancer manuellement depuis l'onglet "Actions" de GitHub
+  workflow_dispatch:
+
+# Permissions nécessaires pour publier sur GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Empêche deux déploiements de tourner en parallèle (évite les conflits)
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  # ----------- JOB 1 : rendre le .qmd en HTML -----------
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Étape 1 : récupère le code du repo sur la VM
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Étape 2 : installe Quarto
+      - name: Set up Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+
+      # Étape 3 : installe R
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true   # binaires précompilés -> install rapide
+
+      # Étape 4 : installe Pandoc (au cas où Quarto ne le fournisse pas)
+      - name: Set up Pandoc
+        uses: r-lib/actions/setup-pandoc@v2
+
+      # Étape 5 : installe les paquets système nécessaires aux packages R
+      # (Bioconductor a souvent besoin de libs C/C++ système)
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libcurl4-openssl-dev \
+            libssl-dev \
+            libxml2-dev \
+            libfontconfig1-dev \
+            libharfbuzz-dev \
+            libfribidi-dev \
+            libfreetype6-dev \
+            libpng-dev \
+            libtiff5-dev \
+            libjpeg-dev \
+            libglpk-dev
+
+      # Étape 6 : installe les packages R requis
+      # Bioconductor packages via BiocManager, le reste via CRAN
+      - name: Install R packages
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::BiocManager
+            any::ggplot2
+            any::knitr
+            any::dplyr
+            any::vegan
+            any::DT
+            any::patchwork
+            any::plotly
+            any::rmarkdown
+            bioc::mia
+            bioc::miaViz
+            bioc::scater
+            bioc::sechm
+          # Met en cache les packages installés -> builds suivants beaucoup plus rapides
+          cache-version: 1
+
+      # Étape 7 : rend le document Quarto
+      - name: Render Quarto document
+        run: quarto render marine-microbiome-workflow.qmd
+
+      # Étape 8 : prépare le dossier à publier sur Pages
+      # On copie le HTML rendu + ses fichiers auxiliaires dans un dossier _site
+      - name: Prepare site for Pages
+        run: |
+          mkdir -p _site
+          cp marine-microbiome-workflow.html _site/index.html
+          if [ -d "marine-microbiome-workflow_files" ]; then
+            cp -r marine-microbiome-workflow_files _site/
+          fi
+
+      # Étape 9 : upload l'artefact pour le job de déploiement
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./_site
+
+  # ----------- JOB 2 : déployer sur GitHub Pages -----------
+  deploy:
+    needs: build           # attend que le build soit fini
+    runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
