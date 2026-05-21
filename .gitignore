@@ -1,0 +1,23 @@
+# Quarto
+/.quarto/
+*_files/
+*_cache/
+/_site/
+/_book/
+/_freeze/
+
+# Quarto output formats — on ne versionne pas le rendu
+*.html
+*.pdf
+!README.html
+
+# R
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+
+# OS
+.DS_Store
+Thumbs.db

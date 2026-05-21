@@ -1,0 +1,56 @@
+---
+title: "Workflow d'introduction au microbiome marin avec miaverse"
+author: "Axel Dagnaud"
+lang: fr
+---
+
+```{r}
+#| label: setup
+#| include: false
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, cache = TRUE)
+```
+
+## Introduction
+
+Bienvenue dans ce workflow d'introduction au [miaverse](https://microbiome.github.io/) à l'aide du **microbiome marin**. blabla microbiome marin
+
+Ce tutoriel reprend la trame d'un workflow d'introduction au package
+[`mia`](https://microbiome.github.io/mia/) et l'applique à un cas d'étude marin.
+Au programme :
+
+- importer et structurer des données de microbiome dans un objet
+  `TreeSummarizedExperiment`,
+- manipuler et sous-ensembler les données,
+- estimer la diversité **alpha** (à l'intérieur d'un échantillon) et **bêta**
+  (entre échantillons),
+- visualiser la composition taxonomique,
+- ouvrir vers les vraies données de l'expédition *Tara Oceans*.
+
+::: {.callout-note}
+Le code est entièrement reproductible. Le jeu de données utilisé est inclus dans
+`mia`, aucun téléchargement externe n'est nécessaire.
+:::
+
+## Installation des packages
+
+```{r}
+#| label: install
+#| output: false
+packages <- c(
+  "mia", "miaViz", "scater",
+  "ggplot2", "patchwork", "plotly", "DT",
+  "vegan", "dplyr", "sechm"
+)
+
+# Installation via BiocManager si nécessaire
+if (!require("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+
+to_install <- setdiff(packages, rownames(installed.packages()))
+if (length(to_install) > 0) {
+  BiocManager::install(to_install, ask = FALSE, update = FALSE)
+}
+
+invisible(lapply(packages, library, character.only = TRUE))
+```
