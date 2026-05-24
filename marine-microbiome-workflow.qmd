@@ -171,3 +171,47 @@ Ces colonnes sont la base de la fonction d'agglomération vue plus bas.
 
 ![Structure d'un *TreeSummarizedExperiment* (figure adaptée de @Huang2021).](https://microbiome.github.io/OMA/inst/pages/images/TSE-structure.svg){.lightbox .contentimg}
 
+<hr>
+
+## Manipulation des données
+
+`mia` rend les opérations de manipulation similaires au lexique de
+*Bioconductor* (indexation `[ligne, colonne]`) et compatible avec `dplyr`
+pour les métadonnées.
+
+### Sous-ensembles
+
+Sélectionner les échantillons océaniques uniquement se fait avec un filtre classique sur les colonnes :
+
+```{r}
+#| label: subsetBySample
+tse_ocean <- tse[, tse$SampleType == "Ocean"]
+tse_ocean
+```
+
+On obtient un nouveau TreeSE qui ne contient plus que les trois échantillons
+océaniques, **mais conserve toutes les lignes** (les taxons absents de ces
+échantillons restent présents avec des comptes nuls). Pour aussi filtrer les
+taxons absents, on combinerait avec un filtre sur `rowSums(assay(...)) > 0`
+ou avec `subsetByPrevalent()`.
+
+### Agglomération des données
+
+Pour analyser à un rang taxonomique plus large que les OTUs/ASVs (par exemple
+le *Phylum*), `agglomerateByRank()` somme les comptes de tous les taxons
+partageant la même valeur à ce rang :
+
+```{r}
+#| label: agglomerating-data
+tse.agglomerated <- agglomerateByRank(tse, rank = "Phylum")
+datatable(as.data.frame(rowData(tse.agglomerated)),
+          options = list(pageLength = 5),
+          rownames = FALSE)
+```
+
+Le nombre de lignes a chuté drastiquement : on est passé de plusieurs milliers
+d'OTUs à quelques dizaines de phyla. Les colonnes en dessous de *Phylum* sont
+remplies de `NA`, ce qui est attendu (l'agglomération efface la résolution
+inférieure). Pour la suite, nous gardons les données **non agglomérées** pour
+travailler à la résolution maximale, mais tout le code qui suit fonctionne
+aussi sur `tse.agglomerated`.
