@@ -215,3 +215,289 @@ remplies de `NA`, ce qui est attendu (l'agglomération efface la résolution
 inférieure). Pour la suite, nous gardons les données **non agglomérées** pour
 travailler à la résolution maximale, mais tout le code qui suit fonctionne
 aussi sur `tse.agglomerated`.
+
+## Indicateurs
+
+### Diversité de la communauté
+
+La diversité de la communauté en microbiologie est mesurée par plusieurs indices :
+
+-   la **richesse en espèces** (nombre total d'espèces)
+-   l'**équitabilité** (répartition des espèces au sein d'un microbiome)
+-   la **diversité** (combinaison des deux)
+
+
+Le coefficient de @Hill unifie ces mesures dans une seule équation. L'ensemble
+de ces indicateurs *intra-échantillon* est appelé **diversité alpha**.
+
+```{r}
+#| label: calculateRichness
+tse_alpha <- estimateRichness(tse,
+                              assay.type = "counts",
+                              index      = "observed",
+                              name       = "observed")
+head(tse_alpha$observed)
+```
+
+`estimateRichness()` ajoute une nouvelle colonne dans `colData` (ici
+`observed`, choisie via le paramètre `name`). Les valeurs représentent le
+nombre de taxons distincts détectés dans chaque échantillon : on observe une
+forte hétérogénéité, certains échantillons ayant 4 à 5 fois plus de taxons
+que d'autres. Cette dispersion est attendue entre habitats aquatiques très
+différents (la colonne d'eau océanique est généralement moins riche qu'un
+sédiment estuarien, où la diversité explose grâce aux microniches).
+
+Visualisons cela en regroupant par type d'environnement :
+
+```{r}
+#| label: plotColdata
+plotColData(tse_alpha,
+            "observed",
+            "SampleType",
+            colour_by = "SampleType") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(y = expression(Richness[Observed]))
+```
+
+Le graphique confirme la lecture précédente : les sédiments estuariens
+concentrent les valeurs de richesse les plus élevées, les échantillons
+océaniques se situent au milieu, et l'eau douce présente la richesse la plus
+faible. `plotColData()` (de `scater`) lit directement les colonnes du
+`colData` — c'est le réflexe à avoir pour visualiser n'importe quelle
+variable par échantillon dans miaverse.
+
+Pour aller plus loin, comparons la **richesse observée** avec l'**indice de Shannon**. Shannon quantifie à la fois le nombre de taxons et l'uniformité de
+leur abondance :
+
+$$
+H' = -\sum_{i=1}^{R} p_i \ln(p_i)
+$$
+
+où $p_i$ est la proportion du taxon $i$.
+
+<hr>
+
+```{r}
+#| label: calculateDiversity
+tse_alpha <- estimateDiversity(tse_alpha,
+                               assay.type = "counts",
+                               index      = "shannon",
+                               name       = "shannon")
+```
+
+Comme `estimateRichness()`, la fonction enrichit `colData` sans dupliquer
+l'objet. On peut ajouter tous les indices souhaités (`simpson`,
+`coverage`, `gini_simpson`…).
+
+```{r}
+#| label: violinPlots
+plots <- lapply(c("observed", "shannon"),
+                plotColData,
+                object    = tse_alpha,
+                x         = "SampleType",
+                colour_by = "SampleType")
+
+plots <- lapply(plots, "+",
+                theme(axis.text.x = element_blank(),
+                      axis.title.x = element_blank(),
+                      axis.ticks.x = element_blank()))
+
+(plots[[1]] | plots[[2]]) +
+  plot_layout(guides = "collect")
+```
+
+Les deux indices classent les environnements dans le **même ordre** :
+sédiment > océan > eau douce. Cette concordance est un signal fort —
+quand richesse et Shannon donnent le même classement, les différences
+entre groupes sont robustes et ne tiennent pas à un artefact de mesure.
+Un point intéressant à observer en détail : l'**eau douce** passe de la
+position intermédiaire en richesse à la position la plus basse en
+Shannon. Ce décrochage indique que ses communautés sont moins
+**équitables** — quelques taxons y dominent fortement, ce qui pénalise
+Shannon sans affecter la richesse brute. C'est précisément pourquoi on
+calcule plusieurs indices : la richesse compte les taxons, Shannon
+intègre la régularité de leurs abondances.
+
+<hr>
+
+### Similarité de la communauté
+
+La similarité de la communauté quantifie à quel point deux échantillons se
+ressemblent en composition. En microbiome, on raisonne plus souvent en termes
+de **dissimilarité** (= diversité bêta), avec la mesure de Bray-Curtis :
+
+$$
+BC_{ij} = \frac{\sum_{k} |A_{k} - B_{k}|}{\sum_{k} (A_{k} + B_{k})}
+$$
+
+Bray-Curtis se calcule sur des **abondances relatives**, pas des comptes
+bruts (sinon les échantillons les plus séquencés écrasent les autres).
+`transformAssay()` permet cette transformation en une ligne :
+
+```{r}
+#| label: calculateRelabundance
+tse <- transformAssay(tse,
+                      assay.type = "counts",
+                      method     = "relabundance")
+```
+
+L'objet contient maintenant **deux assays** : `counts` (les comptes
+originaux) et `relabundance` (la transformation). On accède à n'importe
+lequel via `assay(tse, "nom_assay")` — c'est tout l'intérêt de la structure
+multi-assay : aucune écriture sur disque, on peut empiler les
+représentations alternatives d'une même donnée.
+
+```{r}
+#| label: showRelabundance
+assay(tse, "relabundance")[5:10, 1:5]
+```
+
+Les valeurs sont désormais des proportions (somme à 1 par colonne). C'est ce
+nouveau assay qu'on fournit à la fonction d'ordination :
+
+```{r}
+#| label: calculateBrayCurtis
+#| output: false
+tse <- runMDS(tse,
+              FUN        = vegdist,
+              method     = "bray",
+              assay.type = "relabundance",
+              name       = "MDS_bray")
+```
+
+`runMDS()` (de `scater`) calcule la matrice de distances Bray-Curtis via
+`vegan::vegdist`, applique une **analyse en coordonnées principales (PCoA)**
+et stocke le résultat dans `reducedDim(tse, "MDS_bray")`. La PCoA résume des données complexes en un graphique simple (à 2 ou 3 axes). Son but est de placer les points de manière à ce que la distance visuelle sur le graphique reflète le plus fidèlement possible la vraie différence entre les éléments d'origine.
+
+```{r}
+#| label: showPCoA
+p <- plotReducedDim(tse, "MDS_bray", colour_by = "SampleType")
+ggplotly(p)
+```
+
+Le graphique sépare nettement les trois environnements : océan, eau douce et
+sédiment estuarien occupent chacun une zone distincte du plan. Cette
+ségrégation est attendue (salinité, oxygène, substrat sélectionnent des
+communautés très différentes) et constitue une **première validation qualitative** des données avant tout test statistique. En revanche, les axes
+sont muets : ils ne disent pas combien de variance ils capturent.
+
+On corrige ça en lisant la sortie `eig` (valeurs propres) attachée au PCoA :
+
+```{r}
+#| label: addVariancePCoA
+e <- attr(reducedDim(tse, "MDS_bray"), "eig")
+rel_eig <- e / sum(e[e > 0])
+
+p <- p +
+  labs(x = paste0("PCoA 1 (", round(100 * rel_eig[[1]], 1), "%)"),
+       y = paste0("PCoA 2 (", round(100 * rel_eig[[2]], 1), "%)"))
+ggplotly(p)
+```
+
+Les axes affichent maintenant le pourcentage de variance retenu. Le premier
+axe (PCoA 1) capture l'essentiel de la structure inter-environnements, ce
+qui est cohérent avec la séparation visuelle observée. Toujours indiquer la
+variance expliquée sur ce type de graphique car un PCoA non annoté est
+quasiment impossible à interpréter correctement.
+
+<hr>
+
+## Visualisation des données
+
+Les heatmaps comptent parmi les visualisations les plus polyvalentes en
+microbiome. Cette section construit une heatmap simple sur les taxons les
+plus prévalents avec le package
+[`sechm`](https://bioconductor.org/packages/release/bioc/html/sechm.html).
+
+Le sous-ensemble est stocké dans une **experiment alternative** (`altExp`),
+mécanisme qui permet de rattacher au TreeSE principal des versions
+transformées sans toucher à l'objet d'origine.
+
+```{r}
+#| label: most-prevalent
+# Avec 9 échantillons répartis sur 3 environnements très contrastés,
+# un seuil de prévalence à 50 % devient trop strict : peu de taxons
+# survivent. On le ramène à 30 %, puis on borne avec head() le nombre de
+# taxons retenus.
+prevalent <- subsetByPrevalent(tse, prevalence = 0.3)
+altExp(tse, "prevalence-subset") <- head(prevalent, 5)
+
+altExp(tse, "prevalence-subset")
+```
+
+`subsetByPrevalent()` ne conserve que les taxons présents dans au moins
+30 % des échantillons. `head()` en retient ensuite les cinq premiers
+(préférable à `[1:5, ]`, qui crée des `NA` quand l'objet est plus petit
+qu'attendu). Le mécanisme `altExp` rend service pour comparer plusieurs
+"vues" d'un même dataset, filtré/non filtré, brut/normalisé, sans
+dupliquer l'objet.
+
+::: {.callout-tip title="Bon réflexe miaverse"}
+Le seuil de prévalence dépend du nombre d'échantillons et de leur
+homogénéité. Sur 30 échantillons d'un même habitat, 50 % a du sens. Sur 9
+échantillons répartis dans trois habitats très différents (comme ici),
+50 % vide presque tout. Toujours vérifier `nrow()` après filtrage.
+:::
+
+Les abondances relatives attachées au sous-ensemble ont été calculées sur
+le dataset complet, elles ne sont plus correctes après le filtrage. Il
+faut donc les recalculer.
+
+```{r}
+#| label: recalculate-relabundance
+altExp(tse, "prevalence-subset") <- transformAssay(
+  altExp(tse, "prevalence-subset"),
+  assay.type = "counts",
+  method     = "relabundance"
+)
+```
+
+Oubli classique qui produit des heatmaps trompeuses : toujours recalculer
+les transformations *après* un sous-ensemble.
+
+```{r}
+#| label: heatmap
+#| fig-width: 8
+#| fig-height: 4
+setSechmOption("hmcols", value = c("#F0F0FF", "#005f73"))
+
+suppressWarnings(
+  sechm(altExp(tse, "prevalence-subset"),
+        features      = rownames(altExp(tse, "prevalence-subset")),
+        assayName     = "relabundance",
+        show_colnames = TRUE,
+        sortRowsOn    = NULL,
+        cluster_rows  = FALSE)
+)
+```
+
+Deux niveaux de lecture pour la heatmap :
+
+- **côté technique**, `sechm()` accepte directement un TreeSE (ou un
+  `altExp`) et lit ses `rowData`/`colData` pour produire les étiquettes
+  automatiquement. Plus besoin de remanipuler la matrice à la main ;
+- **côté microbiome**, les intensités varient nettement d'un échantillon à
+  l'autre et la coloration regroupe visuellement ceux qui partagent une
+  signature taxonomique proche. Le résultat rejoint la lecture du PCoA,
+  mais cette fois à la résolution du taxon plutôt qu'à celle de la
+  communauté globale.
+
+## Pour aller plus loin
+
+Ce workflow couvre les briques de base de miaverse. Les chapitres avancés
+d'OMA explorent l'import depuis QIIME2, la normalisation par CLR, les
+tests différentiels d'abondance (`ANCOMBC`, `MaAsLin3`), les réseaux de
+co-occurrence ou encore l'ordination contrainte (`dbRDA`) pour relier
+composition et variables environnementales (température, salinité,
+profondeur). Pour passer à de vraies données marines, le projet
+[*Tara Oceans*](https://fondationtaraocean.org/) met à disposition
+plusieurs centaines d'échantillons 16S/18S publics via
+[ENA](https://www.ebi.ac.uk/ena/browser/view/PRJEB1787).
+
+## Reproductibilité
+
+```{r}
+#| label: session-info
+sessionInfo()
+```
+
